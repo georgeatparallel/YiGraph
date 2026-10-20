@@ -15,6 +15,7 @@ import threading
 import time
 import types
 import unittest
+from uuid import UUID
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -154,10 +155,17 @@ class WebSearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(SOURCE, answer)
         engine.scheduler.router.route.assert_not_called()
         engine.scheduler.reasoner.generate_response.assert_called_once()
-        self.assertEqual(self.calls(), [{"name": "web_search", "arguments": {
+        calls = self.calls()
+        self.assertEqual(len(calls), 1)
+        self.assert_session_id(calls[0]["arguments"].pop("session_id"))
+        self.assertEqual(calls, [{"name": "web_search", "arguments": {
             "objective": "NetworkX PageRank convergence reference",
             "search_queries": ["NetworkX PageRank convergence reference"]}}])
         self.assert_wire_headers()
+
+    def assert_session_id(self, value):
+        self.assertEqual(str(UUID(value)), value)
+        self.assertEqual(UUID(value).version, 4)
 
     def assert_wire_headers(self, key=None):
         methods = {request[2]["method"] for request in self.server.requests}
@@ -175,14 +183,18 @@ class WebSearchTests(unittest.IsolatedAsyncioTestCase):
         url = "https://networkx.org/documentation/stable/?version=3#pagerank"
         answer = await engine.run("/fetch " + url, mode="interact")
         self.assertIn(SOURCE, answer)
-        self.assertEqual(self.calls(), [{"name": "web_fetch", "arguments": {"urls": [url]}}])
+        calls = self.calls()
+        self.assertEqual(len(calls), 1)
+        self.assert_session_id(calls[0]["arguments"].pop("session_id"))
+        self.assertEqual(calls, [{"name": "web_fetch", "arguments": {"urls": [url]}}])
         self.assertNotIn("private", json.dumps(self.server.requests))
         self.assert_wire_headers("explicit-key")
 
     async def test_disabled_and_invalid_settings_never_access_network(self):
         for settings in [{"enabled": False}, {"provider": "unknown"}, {"timeout": 0},
                          {"timeout": True}, {"timeout": float("inf")},
-                         {"enabled": "false"}, {"api_key": 42}, {"url": "file:///tmp/socket"}, False, []]:
+                         {"enabled": "false"}, {"api_key": 42}, {"url": "file:///tmp/socket"},
+                         {"url": 42}, {"url": []}, {"url": None}, False, []]:
             with self.subTest(settings=settings):
                 engine = self.engine(settings)
                 answer = await engine.run("/web graph algorithm references")
@@ -251,8 +263,10 @@ class WebSearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("communities", first)
         self.assertIn("https://example.org/communities", second)
         self.assertNotIn("pagerank", second)
-        # No process/provider/connection ID is misrepresented as a conversation.
-        self.assertTrue(all("session_id" not in call["arguments"] for call in self.calls()))
+        ids = [call["arguments"]["session_id"] for call in self.calls()]
+        self.assertEqual(len(set(ids)), 2)
+        for value in ids:
+            self.assert_session_id(value)
 
 
 if __name__ == "__main__":

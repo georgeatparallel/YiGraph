@@ -1,13 +1,14 @@
 """Explicit web research using Parallel's Streamable HTTP MCP endpoint.
 
-Only the command's text is sent. The shared scheduler does not expose a chat
-identity, so the optional MCP session_id is deliberately left to the server.
+Only the command's text is sent. Each command is a standalone research run with
+its own opaque session_id, independent of the shared scheduler or MCP connection.
 """
 
 import asyncio
 import math
 from datetime import timedelta
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 import httpx
 from mcp import ClientSession
@@ -28,6 +29,8 @@ def _http_client(headers=None, timeout=None, auth=None):
 
 
 def _http_url(value):
+    if not isinstance(value, str):
+        return False
     try:
         parsed = urlsplit(value)
         return (
@@ -76,6 +79,9 @@ async def answer_web_command(command, text, settings, reasoner):
         "objective": text,
         "search_queries": [" ".join(text.split()[:6])],
     }
+    # A command owns this research run. Transport retries reuse these arguments;
+    # another command, including in the same shared scheduler, gets a new ID.
+    arguments["session_id"] = str(uuid4())
 
     try:
         async with asyncio.timeout(timeout):
